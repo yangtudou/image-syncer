@@ -1,0 +1,29 @@
+target:
+  registry:
+  namespace:
+  flatten: true
+  platforms:
+    - linux/amd64
+
+images:
+  docker.io:
+    cloudflare/cloudflared:
+    metacubex/mihomo:
+    library/registry: 3
+    library/traefik: v3.7
+    joxit/docker-registry-ui: main
+    tecnativa/docker-socket-proxy: master
+    gdy666/lucky: v2
+    louislam/dockge: 1
+    louislam/uptime-kuma: 2
+
+  ghcr.io:
+    finb/bark-server:
+    hacdias/webdav:
+    dani-garcia/vaultwarden:
+    jellyfin/jellyfin:
+    userdocs/iperf3-static:
+    usememos/memos: 0.29.1
+    tailscale/tailscale: stable
+    sagernet/sing-box:
+      - +latest-testing
