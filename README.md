@@ -1,38 +1,30 @@
 # image-syncer
 
-![workflow check](https://github.com/AliyunContainerService/image-syncer/actions/workflows/check.yml/badge.svg)
-![workflow build](https://github.com/AliyunContainerService/image-syncer/actions/workflows/synctest.yml/badge.svg)
-[![Version](https://img.shields.io/github/v/release/AliyunContainerService/image-syncer)](https://github.com/AliyunContainerService/image-syncer/releases)
-[![Go Report Card](https://goreportcard.com/badge/github.com/AliyunContainerService/image-syncer)](https://goreportcard.com/report/github.com/AliyunContainerService/image-syncer)
-[![Github All Releases](https://img.shields.io/github/downloads/AliyunContainerService/image-syncer/total.svg)](https://api.github.com/repos/AliyunContainerService/image-syncer/releases)
-[![codecov](https://codecov.io/gh/AliyunContainerService/image-syncer/graph/badge.svg)](https://codecov.io/gh/AliyunContainerService/image-syncer)
-[![License](https://img.shields.io/github/license/AliyunContainerService/image-syncer)](https://www.apache.org/licenses/LICENSE-2.0.html)
+`image-syncer` 是一个容器镜像同步工具，可用来进行多对多的镜像仓库同步，支持目前绝大多数主流的 docker 镜像仓库服务
 
-`image-syncer` is a docker registry tools. With `image-syncer` you can synchronize docker images from some source registries to target registries, which include most popular public docker registry services.
-
-English | [简体中文](./README-zh_CN.md)
+[English](./README.md) | 简体中文
 
 ## Features
 
-- Support for many-to-many registry synchronization
-- Supports docker registry services based on Docker Registry V2 (e.g., Alibaba Cloud Container Registry Service, Docker Hub, Quay.io, Harbor, etc.)
-- Network & Memory Only, doesn't rely on any large disk storage, fast synchronization
-- Incremental Synchronization, ignore unchanged images automatically
-- BloB-Level Concurrent Synchronization, adjustable goroutine numbers
-- Automatic Retries of Failed Sync Tasks, to resolve the network problems (rate limit, etc.) while synchronizing
-- Doesn't rely on Docker daemon or other programs
+- 支持多对多镜像仓库同步
+- 支持基于 Docker Registry V2 搭建的镜像仓库服务 (如 Docker Hub、 Quay、 阿里云镜像服务 ACR、 Harbor 等)
+- 同步过程只经过内存和网络，不依赖磁盘存储，同步速度快
+- 自动增量同步, 自动忽略已同步且不需要修改的镜像
+- 支持镜像层级别的并发同步，可以通过配置文件调整并发数（可以理解为同一时间在同步的镜像层数量上限）
+- 自动重试失败的同步任务，可以解决大部分镜像同步中的偶发问题（限流、网络抖动），支持重试次数配置
+- 简单轻量，不依赖 docker 以及其他程序
 
-## Usage
+## 使用
 
 ### GitHub Action
 
-You can use [image-sync-action](https://github.com/marketplace/actions/image-sync-action) to try image-syncer online without paying for any machine resources.
+可以使用 [image-sync-action](https://github.com/marketplace/actions/image-sync-action) 这个 github action 来实现灵活触发的镜像同步作业（比如定时同步），不需要支付任何资源的同时，也可以解决国内外网访问的问题
 
-### Install image-syncer
+### 下载和安装
 
-You can download the latest binary release [here](https://github.com/AliyunContainerService/image-syncer/releases)
+在 [releases](https://github.com/AliyunContainerService/image-syncer/releases) 页面可下载源码以及二进制文件
 
-### Compile Manually
+### 手动编译
 
 ```bash
 go get github.com/AliyunContainerService/image-syncer
@@ -42,35 +34,36 @@ cd $GOPATH/github.com/AliyunContainerService/image-syncer
 make
 ```
 
-### Example
+### 命令用例
 
 ```bash
-# Get usage information
+# 获得帮助信息
 ./image-syncer -h
 
-./image-syncer --proc=6 --auth=./auth.json --images=./images.json --retries=3
+./image-syncer --auth=./auth.json --sync=./sync.yaml --proc=6 --retries=3
 ```
 
-### Configure Files
+### 配置文件
 
-Image-syncer supports `--auth` and `--images` flag for passing authentication file and image sync configuration file, both of which supports YAML and JSON format. Seperate authentication information is more flexible to reuse it in different sync missions.
+为了提高配置的灵活性，image-syncer 支持通过 `--auth` 参数以文件的形式传入认证信息
 
-> The older version (< v1.2.0) of configuration file is still supported via `--config` flag, you can find the example in [config.yaml](examples/config.yaml) and [config.json](examples/config.json).
 
-#### Authentication file
+#### 认证信息
 
-Authentication file holds all the authentication information for each registry. For each registry (or namespace), there is a object which contains username and password. For each images sync rule in image sync configuration file, image-syncer will try to find a match in all the authentication information and use the best(longest) fit one. Access will be anonymous if no authentication information is found.
+认证信息中可以同时描述多个 registry（或者 registry/namespace）对象，一个对象可以包含账号和密码，其中，密码可能是一个 TOKEN
 
-You can find the example in [auth.yaml](examples/auth.yaml) and [auth.json](examples/auth.json), here we use [auth.yaml](examples/auth.yaml) for explaination:
+> 注意，通常镜像源仓库需要具有 pull 以及访问 tags 权限，镜像目标仓库需要拥有 push 以及创建仓库权限；如果对应仓库没有提供认证信息，则默认匿名访问
+
+认证信息文件通过 `--auth` 参数传入，具体文件样例可以参考 [auth.yaml](examples/auth.yaml) 和 [auth.json](examples/auth.json)，这里以 [auth.yaml](examples/auth.yaml) 为例：
 
 ```yaml
-quay.io: # This "registry" or "registry/namespace" string should be the same as registry or registry/namespace used below in image sync rules. And if an url match multiple objects, the "registry/namespace" string will actually be used.
+quay.io: #支持 "registry" 和 "registry/namespace"（v1.0.3之后的版本） 的形式，image-syncer 会自动为镜像同步规则中的每个源/目标 url 查找认证信息，并且使用对应认证信息进行进行访问，如果匹配到了多个，用“最长匹配”的那个作为最终结果
   username: xxx
   password: xxxxxxxxx
-  insecure: true # Optional, "insecure" field needs to be true if this registry is a http service, default value is false.
+  insecure: true # 可选，（v1.0.1 之后支持）registry是否是http服务，如果是，insecure 字段需要为 true，默认是 false
 registry.cn-beijing.aliyuncs.com:
-  username: xxx # Optional, if the value string is a format of "${env}" or "$env", use the "env" environment variables as username.
-  password: xxxxxxxxx # Optional, if the value string is a format of "${env}" or "$env", use the "env" environment variables as password.
+  username: xxx # 可选，（v1.3.1 之后支持）value 使用 "${env}" 或者 "$env" 形式可以引用环境变量
+  password: xxxxxxxxx # 可选，（v1.3.1 之后支持）value 使用 "${env}" 或者 "$env" 类型的字符串可以引用环境变量
 docker.io:
   username: "${env}"
   password: "$env"
@@ -80,21 +73,20 @@ quay.io/coreos:
   insecure: true
 ```
 
-#### Image sync configuration file
+#### 镜像同步规则
 
-Image sync configuration file defines all the image sync rules. Each rule is a key/value pair, of which the key refers to "the source images url" and the value refers to "the destination images url". The source/destination images url is mostly the same with the url we use
-in `docker pull/push` commands, but still something different in the "tags and digest" part:
+每条镜像同步规则为一个 “源镜像 url: 目标镜像 url” 的键值对。无论是源镜像 url 还是目标镜像 url，字符串格式都和 docker pull 命令所使用的镜像 url 大致相同（registry/repository:tag、registry/repository@digest），但在 tag 和 digest 配置上和 docker pull 所使用的 url 存在区别，这里对整体逻辑进行描述：
 
-1. Neither of the source images url and the destination images url should be empty.
-2. If the source images url contains no tags or digest, all the tags of source repository will be synced.
-3. The source images url can have more than one tags, which should be seperated by comma, only the specified tags will be synced.
-4. The source images url can have at most one digest, and the destination images url should only have no digest or the same digest at the same time.
-5. The "tags" part of source images url can be a regular expression which needs to have an additional prefix and suffix string `/`. All the tags of source repository that matches the regular expression will be synced. Multiple regular expressions is not supported.
-6. If the destination images url has no digest or tags, it means the source images will keep the same tags or digest after being synced.
-7. The destination images url can have more than one tags, the number of which must be the same with the tags in the source images url, then all the source images' tags will be changed to a new one (correspond from left to right).
-8. The "destination images url" can also be an array, each of which follows the rules above.
+1. 源镜像 url、目标镜像 url 都不能为空
+2. 源镜像 url 不包含 tag 和 digest 时，代表同步源镜像 repository 中的所有镜像 tag
+3. 源镜像 url 可以包含一个或多个 tag，多个 tag 之间用英文逗号分隔，代表同步源镜像 repository 中的多个指定镜像 tag
+4. 源镜像 url 可以但最多只能包含一个 digest，此时如果目标镜像 url 包含 digest，digest 必须一致
+5. 源镜像 url 的 "tag" 可以是一个正则表达式，需要额外在首尾加上 `/` 字符作为标识，源镜像 repository 中所有匹配正则表达式的镜像 tag 会被同步，不支持多个正则表达式
+6. 目标镜像 url 可以不包含 tag 和 digest，表示所有需同步的镜像保持其镜像 tag 或者 digest 不变
+7. 目标镜像 url 可以包含多个 tag 或者 digest，数量必须与源镜像 url 中的 tag 数量相同，此时，同步后的镜像 tag 会被修改成目标镜像 url 中指定的镜像 tag（按照从左到右顺序对应）
+8. 支持同时指定多个目标镜像 url，此时 "目标镜像 url" 为数组的形式，数组的每个元素（字符串）都需要满足前面的规则
 
-You can find the example in [images.yaml](examples/images.yaml) and [images.json](examples/images.json), here we use [images.yaml](examples/images.yaml) for explaination:
+镜像同步规则文件通过 `--images` 参数传入，具体文件样例可以参考 [images.yaml](examples/images.yaml) 和 [images.json](examples/images.json)，这里以 [images.yaml](examples/images.yaml) 为例。 示例如下：
 
 ```yaml
 quay.io/coreos/kube-rbac-proxy: quay.io/ruohe/kube-rbac-proxy
@@ -107,38 +99,36 @@ quay.io/coreos/kube-rbac-proxy:v1.1:
 quay.io/coreos/kube-rbac-proxy:/a+/: quay.io/ruohe/kube-rbac-proxy
 ```
 
-### Parameters
+### 更多参数
+
+`image-syncer` 的使用比较简单，但同时也支持多个命令行参数的指定：
 
 ```
--h  --help       Usage information
+-h  --help       使用说明，会打印出一些启动参数的当前默认值
 
-    --config     Set the path of config file, this file need to be created before starting synchronization, default
-                 config file is at "current/working/directory/config.json". (This flag can be replaced with flag --auth
-                 and --images which for better orgnization.)
+    --config     设置用户提供的配置文件路径，使用之前需要创建此文件，默认为当前工作目录下的config.json文件。这个参数与 --auth和--images 的
+                 作用相同，分解成两个参数可以更好地区分认证信息与镜像仓库同步规则。建议使用 --auth 和 --images.
 
-    --auth       Set the path of authentication file, this file need to be created before starting synchronization, default
-                 config file is at "current/working/directory/auth.json". This flag need to be pair used with --images.
+    --auth       设置用户提供的认证文件所在路径，使用之前需要创建此认证文件，默认为当前工作目录下的auth.json文件
 
-    --images     Set the path of image rules file, this file need to be created before starting synchronization, default
-                 config file is at "current/working/directory/images.json". This flag need to be pair used with --auth.
+    --images     设置用户提供的镜像同步规则文件所在路径，使用之前需要创建此文件，默认为当前工作目录下的images.json文件
 
-    --log        Set the path of log file, logs will be printed to Stderr by default
+    --log        打印出来的log文件路径，默认打印到标准错误输出，如果将日志打印到文件将不会有命令行输出，此时需要通过cat对应的日志文件查看
 
-    --proc       Number of goroutines, default value is 5
+    --proc       并发数，进行镜像同步的并发goroutine数量，默认为5
 
-    --retries    Times to retry failed tasks, default value is 2, the retries of failed tasks will start after all the tasks
-                 are executed once, this can resolve most occasional network problems during synchronization
+    --retries    失败同步任务的重试次数，默认为2，重试会在所有任务都被执行一遍之后开始，并且也会重新尝试对应次数生成失败任务的生成。一些偶尔出现的网络错误比如io timeout、TLS handshake timeout，都可以通过设置重试次数来减少失败的任务数量
 
-    --os         OS list to filter source tags, not works for docker v2 schema1 media, takes no effect if empty
+    --os         用来过滤源 tag 的 os 列表，为空则没有任何过滤要求，只对非 docker v2 schema1 media 类型的镜像格式有效
 
-    --arch       Architecture list to filter source tags, takes no effect if empty
+    --arch       用来过滤源 tag 的 architecture 列表，为空则没有任何过滤要求
 
-    --force      Force update manifest whether the destination manifest exists
+    --force      同步已经存在的、被忽略的镜像，这个操作会更新已存在镜像的时间戳
 ```
 
 ### FAQs
 
-Frequently asked questions are listed in [FAQs](./FAQs.md)
+同步中常见的问题汇总在[FAQs 文档](./FAQs.md)中
 
 ## Star History
 
