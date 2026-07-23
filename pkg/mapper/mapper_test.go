@@ -8,19 +8,24 @@ import (
 
 func TestGenerate(t *testing.T) {
 	cfg := &config.Config{
-		Target: config.TargetConfig{
+		Dest: config.DestConfig{
 			Registry:  "registry.example.com",
 			Namespace: "mirror",
 			Flatten:   true,
 		},
-		Images: map[string]map[string]any{
+		Sources: map[string]config.SourceConfig{
 			"docker.io": {
-				"library/registry": "3",
-				"library/nginx":    nil,
+				Images: map[string]any{
+					"library/registry": "3",
+					"library/nginx":    nil,
+				},
 			},
 			"ghcr.io": {
-				"sagernet/sing-box": []any{
-					"+latest-testing",
+				Images: map[string]any{
+					"sagernet/sing-box": []any{
+						"latest",
+						"latest-testing",
+					},
 				},
 			},
 		},

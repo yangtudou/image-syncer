@@ -1,134 +1,234 @@
 package client
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 
-	"github.com/AliyunContainerService/image-syncer/pkg/utils/types"
-
-	"github.com/sirupsen/logrus"
-
+	appconfig "github.com/AliyunContainerService/image-syncer/pkg/config"
 	"github.com/AliyunContainerService/image-syncer/pkg/utils"
-
-	"gopkg.in/yaml.v2"
+	"github.com/AliyunContainerService/image-syncer/pkg/utils/types"
 )
 
 // Config information of sync client
 type Config struct {
-	// the authentication information of each registry
-	AuthList map[string]types.Auth `json:"auth" yaml:"auth"`
+	AuthList map[string]types.Auth
 
-	// a <source_repo>:<dest_repo> map
-	ImageList map[string]interface{} `json:"images" yaml:"images"`
+	ImageList map[string]interface{}
 
-	// only images with selected os can be sync
-	osFilterList []string
-	// only images with selected architecture can be sync
+	osFilterList   []string
 	archFilterList []string
 }
 
-// NewSyncConfig creates a Config struct
-func NewSyncConfig(configFile, authFilePath, imageFilePath string,
-	osFilterList, archFilterList []string, logger *logrus.Logger) (*Config, error) {
-	if len(configFile) == 0 && len(imageFilePath) == 0 {
-		return nil, fmt.Errorf("neither config.json nor images.json is provided")
+// NewSyncConfigFromModel converts yaml config model into client config
+func NewSyncConfigFromModel(
+	cfg *appconfig.Config,
+	osFilterList []string,
+	archFilterList []string,
+) (*Config, error) {
+
+	config := &Config{
+		AuthList:       make(map[string]types.Auth),
+		ImageList:      make(map[string]interface{}),
+		osFilterList:   osFilterList,
+		archFilterList: archFilterList,
 	}
 
-	if len(configFile) == 0 && len(authFilePath) == 0 {
-		logger.Warnf("[Warning] No authentication information found because neither " +
-			"config.json nor auth.json provided, image-syncer may not work fine.")
-	}
-
-	var config Config
-
-	if len(configFile) != 0 {
-		if err := openAndDecode(configFile, &config); err != nil {
-			return nil, fmt.Errorf("decode config file %v failed, error %v", configFile, err)
+	if cfg.Dest.Auth != nil {
+		config.AuthList[cfg.Dest.Registry] = types.Auth{
+			Username: cfg.Dest.Auth.Username,
+			Password: cfg.Dest.Auth.Password,
 		}
-	} else {
-		if len(authFilePath) != 0 {
-			if err := openAndDecode(authFilePath, &config.AuthList); err != nil {
-				return nil, fmt.Errorf("decode auth file %v error: %v", authFilePath, err)
+	}
+
+	for registry, source := range cfg.Sources {
+
+		if source.Auth != nil {
+			config.AuthList[registry] = types.Auth{
+				Username: source.Auth.Username,
+				Password: source.Auth.Password,
 			}
 		}
-		config.AuthList = expandEnv(config.AuthList)
 
-		if err := openAndDecode(imageFilePath, &config.ImageList); err != nil {
-			return nil, fmt.Errorf("decode image file %v error: %v", imageFilePath, err)
+		for image, value := range source.Images {
+
+			sourceBase := buildSourceImage(
+				registry,
+				image,
+			)
+
+			destinationBase := buildDestinationImage(
+				cfg.Dest,
+				image,
+			)
+
+			config.ImageList[sourceBase] =
+				convertTagsWithDestination(
+					destinationBase,
+					value,
+				)
 		}
 	}
 
-	config.osFilterList = osFilterList
-	config.archFilterList = archFilterList
-
-	return &config, nil
+	return config, nil
 }
 
-// Open json file and decode into target interface
-func openAndDecode(filePath string, target interface{}) error {
-	if !strings.HasSuffix(filePath, ".yaml") &&
-		!strings.HasSuffix(filePath, ".yml") &&
-		!strings.HasSuffix(filePath, ".json") {
-		return fmt.Errorf("only one of yaml/yml/json format is supported")
-	}
+func buildSourceImage(
+	registry string,
+	image string,
+) string {
 
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		return fmt.Errorf("file %v not exist: %v", filePath, err)
-	}
-
-	file, err := os.OpenFile(filePath, os.O_RDONLY, 0666)
-	if err != nil {
-		return fmt.Errorf("open file %v error: %v", filePath, err)
-	}
-
-	if strings.HasSuffix(filePath, ".yaml") || strings.HasSuffix(filePath, ".yml") {
-		decoder := yaml.NewDecoder(file)
-		if err := decoder.Decode(target); err != nil {
-			return fmt.Errorf("unmarshal config error: %v", err)
-		}
-	} else {
-		decoder := json.NewDecoder(file)
-		if err := decoder.Decode(target); err != nil {
-			return fmt.Errorf("unmarshal config error: %v", err)
-		}
-	}
-
-	return nil
+	return strings.TrimSuffix(
+		registry,
+		"/",
+	) + "/" + strings.TrimPrefix(
+		image,
+		"/",
+	)
 }
 
-// GetAuth gets the authentication information in Config
+func buildDestinationImage(
+	dest appconfig.DestConfig,
+	image string,
+) string {
+
+	image = strings.Trim(
+		image,
+		"/",
+	)
+
+	name := image
+
+	if dest.Flatten {
+
+		parts := strings.Split(
+			image,
+			"/",
+		)
+
+		name = parts[len(parts)-1]
+	}
+
+	result := strings.TrimSuffix(
+		dest.Registry,
+		"/",
+	)
+
+	if dest.Namespace != "" {
+
+		result += "/" +
+			strings.Trim(
+				dest.Namespace,
+				"/",
+			)
+	}
+
+	return result + "/" + name
+}
+
+func convertTagsWithDestination(
+	destination string,
+	value any,
+) any {
+
+	switch v := value.(type) {
+
+	case nil:
+
+		return destination + ":latest"
+
+	case string:
+
+		tag := os.ExpandEnv(v)
+
+		if tag == "" {
+			tag = "latest"
+		}
+
+		return destination + ":" + tag
+
+	case []interface{}:
+
+		result := make(
+			[]string,
+			0,
+			len(v),
+		)
+
+		for _, item := range v {
+
+			tag := os.ExpandEnv(
+				fmt.Sprintf(
+					"%v",
+					item,
+				),
+			)
+
+			if tag == "" {
+				tag = "latest"
+			}
+
+			result = append(
+				result,
+				destination+":"+tag,
+			)
+		}
+
+		return result
+
+	case []string:
+
+		result := make(
+			[]string,
+			0,
+			len(v),
+		)
+
+		for _, item := range v {
+
+			tag := os.ExpandEnv(
+				item,
+			)
+
+			if tag == "" {
+				tag = "latest"
+			}
+
+			result = append(
+				result,
+				destination+":"+tag,
+			)
+		}
+
+		return result
+	}
+
+	return destination + ":latest"
+}
+
 func (c *Config) GetAuth(repository string) (types.Auth, bool) {
+
 	auth := types.Auth{}
+
 	prefixLen := 0
+
 	exist := false
 
 	for key, value := range c.AuthList {
-		if matched := utils.RepoMathPrefix(repository, key); matched {
+
+		if utils.RepoMathPrefix(
+			repository,
+			key,
+		) {
+
 			if len(key) > prefixLen {
+
 				auth = value
+				prefixLen = len(key)
 				exist = true
 			}
 		}
 	}
 
 	return auth, exist
-}
-
-func expandEnv(authMap map[string]types.Auth) map[string]types.Auth {
-	result := make(map[string]types.Auth)
-
-	for registry, auth := range authMap {
-		pwd := os.ExpandEnv(auth.Password)
-		name := os.ExpandEnv(auth.Username)
-		newAuth := types.Auth{
-			Username: name,
-			Password: pwd,
-			Insecure: auth.Insecure,
-		}
-		result[registry] = newAuth
-	}
-
-	return result
 }

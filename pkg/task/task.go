@@ -14,25 +14,58 @@ const (
 )
 
 type Task interface {
-	// Run returns primary task and result message if success while primary task is not nil and can run immediately.
+
+	// Run returns next tasks and result message.
 	Run() ([]Task, string, error)
 
-	// GetPrimary returns primary task, manifest for a blob, or manifest list for a manifest
+	// GetPrimary returns primary task.
 	GetPrimary() Task
 
-	// Runnable returns if the task can be executed immediately
+	// Runnable returns if task can run immediately.
 	Runnable() bool
 
-	// ReleaseOnce try to release once and return if the task is runnable after being released.
+	// ReleaseOnce try to release dependency once.
 	ReleaseOnce() bool
 
-	// GetSource return a source refers to the source images.
+	// GetSource returns source image.
 	GetSource() *sync.ImageSource
 
-	// GetDestination return a source refers to the destination images
+	// GetDestination returns destination image.
 	GetDestination() *sync.ImageDestination
 
+	// String returns task description.
 	String() string
 
+	// Type returns task type.
 	Type() Type
+}
+
+// TaskInfo returns common task information for logging.
+type TaskInfo struct {
+	Type        Type
+	Description string
+	Source      string
+	Destination string
+}
+
+// DescribeTask converts Task into log-friendly information.
+func DescribeTask(t Task) TaskInfo {
+
+	info := TaskInfo{
+		Type: t.Type(),
+	}
+
+	if t != nil {
+		info.Description = t.String()
+
+		if source := t.GetSource(); source != nil {
+			info.Source = source.String()
+		}
+
+		if destination := t.GetDestination(); destination != nil {
+			info.Destination = destination.String()
+		}
+	}
+
+	return info
 }

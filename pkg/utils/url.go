@@ -15,173 +15,343 @@ const (
 )
 
 type RepoURL struct {
-	// origin url
 	ref reference.Reference
 
-	// "namespace" is part of repo
 	registry    string
 	repo        string
 	tagOrDigest string
 }
 
-// GenerateRepoURLs creates a RepoURL slice.
-// If url has no tags or digest, tags or digest should be provided by externalTagsOrDigest func,
-// and empty slice will be returned if no tags or digest is provided.
-func GenerateRepoURLs(url string, externalTagsOrDigest func(registry, repository string,
-) (tagsOrDigest []string, err error)) ([]*RepoURL, error) {
+// GenerateRepoURLs creates RepoURL list.
+// 支持：
+// image:tag
+// image@digest
+// image:tag1,tag2
+// image:/regex/
+// image(no tag) -> externalTags
+func GenerateRepoURLs(
+	url string,
+	externalTagsOrDigest func(
+		registry,
+		repository string,
+	) ([]string, error),
+) ([]*RepoURL, error) {
+
 	var result []*RepoURL
-	ref, err := reference.ParseNormalizedNamed(url)
 
 	var tagsOrDigest []string
 	var urlWithoutTagOrDigest string
 
-	if canonicalRef, ok := ref.(reference.Canonical); ok {
-		// url has digest
-		tagsOrDigest = append(tagsOrDigest, canonicalRef.Digest().String())
-		urlWithoutTagOrDigest = canonicalRef.Name()
-	} else if taggedRef, ok := ref.(reference.NamedTagged); ok {
-		// url has one normal tag
-		tagsOrDigest = append(tagsOrDigest, taggedRef.Tag())
-		urlWithoutTagOrDigest = taggedRef.Name()
-	} else if err == nil {
-		// url has no specified digest or tag
-		registry, repo := getRegistryAndRepositoryFromURLWithoutTagOrDigest(url)
-		allTags, err := externalTagsOrDigest(registry, repo)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get external tags: %v", err)
-		}
+	ref, err := reference.ParseNormalizedNamed(url)
 
-		urlWithoutTagOrDigest = url
-		tagsOrDigest = append(tagsOrDigest, allTags...)
-	} else {
-		// url might have special tags
-		if strings.Contains(url, ":/") {
-			// regex exist, /*/, etc.
-			slice := strings.SplitN(url, ":/", 2)
-			if len(slice) != 2 || !strings.HasSuffix(slice[1], "/") {
-				return nil, fmt.Errorf("invalid tag regex url format %v, regex must start and end with \"/\"", url)
+	// digest
+	if err == nil {
+
+		if canonicalRef, ok := ref.(reference.Canonical); ok {
+
+			tagsOrDigest = append(
+				tagsOrDigest,
+				canonicalRef.Digest().String(),
+			)
+
+			urlWithoutTagOrDigest = canonicalRef.Name()
+
+		} else if taggedRef, ok := ref.(reference.NamedTagged); ok {
+
+			tagsOrDigest = append(
+				tagsOrDigest,
+				taggedRef.Tag(),
+			)
+
+			urlWithoutTagOrDigest = taggedRef.Name()
+
+		} else {
+
+			// 没有 tag
+			registry, repo :=
+				getRegistryAndRepositoryFromURLWithoutTagOrDigest(url)
+
+			tags, err :=
+				externalTagsOrDigest(
+					registry,
+					repo,
+				)
+
+			if err != nil {
+				return nil,
+					fmt.Errorf(
+						"failed to get tags: %v",
+						err,
+					)
 			}
 
-			_, err = reference.ParseNormalizedNamed(slice[0])
+			urlWithoutTagOrDigest = url
+
+			tagsOrDigest = append(
+				tagsOrDigest,
+				tags...,
+			)
+		}
+
+	} else {
+
+		// regex tag
+		if strings.Contains(url, ":/") {
+
+			slice :=
+				strings.SplitN(
+					url,
+					":/",
+					2,
+				)
+
+			if len(slice) != 2 ||
+				!strings.HasSuffix(slice[1], "/") {
+
+				return nil,
+					fmt.Errorf(
+						"invalid tag regex format",
+					)
+			}
+
+			_, err :=
+				reference.ParseNormalizedNamed(
+					slice[0],
+				)
+
 			if err != nil {
-				return nil, fmt.Errorf("failed to parse repository url %v: %v", slice[0], err)
+				return nil,
+					err
 			}
 
 			urlWithoutTagOrDigest = slice[0]
-			regexStr := strings.TrimSuffix(slice[1], "/")
-			regex, err := regexp.Compile(regexStr)
+
+			regexStr :=
+				strings.TrimSuffix(
+					slice[1],
+					"/",
+				)
+
+			regex, err :=
+				regexp.Compile(
+					regexStr,
+				)
+
 			if err != nil {
-				return nil, fmt.Errorf("invalid tag regex: \"%v\": %v", regexStr, err)
+				return nil,
+					fmt.Errorf(
+						"invalid regex: %v",
+						err,
+					)
 			}
 
-			registry, repo := getRegistryAndRepositoryFromURLWithoutTagOrDigest(urlWithoutTagOrDigest)
-			allTags, err := externalTagsOrDigest(registry, repo)
+			registry, repo :=
+				getRegistryAndRepositoryFromURLWithoutTagOrDigest(
+					urlWithoutTagOrDigest,
+				)
+
+			allTags, err :=
+				externalTagsOrDigest(
+					registry,
+					repo,
+				)
+
 			if err != nil {
-				return nil, fmt.Errorf("failed to get external tags: %v", err)
+				return nil,
+					err
 			}
 
-			for _, t := range allTags {
-				if regex.MatchString(t) {
-					tagsOrDigest = append(tagsOrDigest, t)
+			for _, tag := range allTags {
+
+				if regex.MatchString(tag) {
+
+					tagsOrDigest =
+						append(
+							tagsOrDigest,
+							tag,
+						)
 				}
 			}
+
 		} else {
-			// multiple tags exist
-			slice := strings.SplitN(url, ",", -1)
-			if len(slice) < 1 {
-				return nil, fmt.Errorf("invalid repository url: %v", url)
+
+			// 多 tag
+			items :=
+				strings.Split(
+					url,
+					",",
+				)
+
+			if len(items) == 0 {
+				return nil,
+					fmt.Errorf(
+						"invalid image url",
+					)
 			}
 
-			ref, err = reference.ParseNormalizedNamed(slice[0])
+			first, err :=
+				reference.ParseNormalizedNamed(
+					items[0],
+				)
+
 			if err != nil {
-				return nil, fmt.Errorf("failed to parse first tag with url %v: %v", slice[0], err)
+				return nil,
+					err
 			}
 
-			urlWithoutTagOrDigest = ref.(reference.NamedTagged).Name()
-			tagsOrDigest = append(tagsOrDigest, ref.(reference.NamedTagged).Tag())
-			tagsOrDigest = append(tagsOrDigest, slice[1:]...)
+			tagged, ok :=
+				first.(reference.NamedTagged)
+
+			if !ok {
+				return nil,
+					fmt.Errorf(
+						"invalid tag image: %s",
+						items[0],
+					)
+			}
+
+			urlWithoutTagOrDigest =
+				tagged.Name()
+
+			tagsOrDigest =
+				append(
+					tagsOrDigest,
+					tagged.Tag(),
+				)
+
+			tagsOrDigest =
+				append(
+					tagsOrDigest,
+					items[1:]...,
+				)
 		}
 	}
 
-	registry, repo := getRegistryAndRepositoryFromURLWithoutTagOrDigest(urlWithoutTagOrDigest)
+	registry, repo :=
+		getRegistryAndRepositoryFromURLWithoutTagOrDigest(
+			urlWithoutTagOrDigest,
+		)
 
-	// if no tags or digest provided, an empty slice will be returned
-	for _, item := range tagsOrDigest {
-		newURL := registry + "/" + repo + AttachConnectorToTagOrDigest(item)
-		ref, err = reference.ParseNormalizedNamed(newURL)
+	for _, tag := range tagsOrDigest {
+
+		newURL :=
+			registry +
+				"/" +
+				repo +
+				AttachConnectorToTagOrDigest(tag)
+
+		ref, err :=
+			reference.ParseNormalizedNamed(
+				newURL,
+			)
+
 		if err != nil {
-			return nil, fmt.Errorf("failed to parese canonical url: %v", newURL)
+			return nil,
+				fmt.Errorf(
+					"invalid canonical url: %s",
+					newURL,
+				)
 		}
 
-		result = append(result, &RepoURL{
-			ref:         ref,
-			registry:    registry,
-			repo:        repo,
-			tagOrDigest: item,
-		})
+		result =
+			append(
+				result,
+				&RepoURL{
+					ref:         ref,
+					registry:    registry,
+					repo:        repo,
+					tagOrDigest: tag,
+				},
+			)
 	}
 
 	return result, nil
 }
 
-// GetURL returns the whole url
 func (r *RepoURL) String() string {
 	return r.ref.String()
 }
 
-// GetRegistry returns the registry in a url
 func (r *RepoURL) GetRegistry() string {
 	return r.registry
 }
 
-// GetRepo returns the repository in a url
 func (r *RepoURL) GetRepo() string {
 	return r.repo
 }
 
-// GetTagOrDigest returns the tag in a url
 func (r *RepoURL) GetTagOrDigest() string {
 	return r.tagOrDigest
 }
 
-// GetRepoWithTagOrDigest returns repository:tag in a url
 func (r *RepoURL) GetRepoWithTagOrDigest() string {
+
 	if r.tagOrDigest == "" {
 		return r.repo
 	}
 
-	return r.repo + AttachConnectorToTagOrDigest(r.tagOrDigest)
+	return r.repo +
+		AttachConnectorToTagOrDigest(
+			r.tagOrDigest,
+		)
 }
 
 func (r *RepoURL) HasDigest() bool {
-	_, result := r.ref.(reference.Canonical)
-	return result
+
+	_, ok :=
+		r.ref.(reference.Canonical)
+
+	return ok
 }
 
 func (r *RepoURL) GetURLWithoutTagOrDigest() string {
-	return r.registry + "/" + r.repo
+
+	return r.registry +
+		"/" +
+		r.repo
 }
 
-func AttachConnectorToTagOrDigest(tagOrDigest string) string {
-	if len(tagOrDigest) == 0 {
+func AttachConnectorToTagOrDigest(
+	tagOrDigest string,
+) string {
+
+	if tagOrDigest == "" {
 		return ""
 	}
 
-	tmpDigest := digest.Digest(tagOrDigest)
-	if err := tmpDigest.Validate(); err != nil {
+	d := digest.Digest(tagOrDigest)
+
+	if err := d.Validate(); err != nil {
+
 		return ":" + tagOrDigest
 	}
+
 	return "@" + tagOrDigest
 }
 
-func getRegistryAndRepositoryFromURLWithoutTagOrDigest(urlWithoutTagOrDigest string) (registry string, repo string) {
-	slice := strings.SplitN(urlWithoutTagOrDigest, "/", 2)
-	if len(slice) == 1 {
+func getRegistryAndRepositoryFromURLWithoutTagOrDigest(
+	url string,
+) (
+	registry string,
+	repo string,
+) {
+
+	items :=
+		strings.SplitN(
+			url,
+			"/",
+			2,
+		)
+
+	if len(items) == 1 {
+
 		registry = DockerHubURL
-		repo = slice[0]
+		repo = items[0]
+
 	} else {
-		registry = slice[0]
-		repo = slice[1]
+
+		registry = items[0]
+		repo = items[1]
 	}
 
 	return

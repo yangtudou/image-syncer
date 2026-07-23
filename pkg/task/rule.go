@@ -3,14 +3,17 @@ package task
 import (
 	"fmt"
 
-	"github.com/AliyunContainerService/image-syncer/pkg/utils/types"
+	"github.com/sirupsen/logrus"
 
 	"github.com/AliyunContainerService/image-syncer/pkg/sync"
 	"github.com/AliyunContainerService/image-syncer/pkg/utils"
+	"github.com/AliyunContainerService/image-syncer/pkg/utils/types"
 )
 
-// RuleTask analyze an image config rule ("xxx:xxx") and generates URLTask(s).
+// RuleTask analyze an image config rule and generates URLTask(s).
 type RuleTask struct {
+	logger *logrus.Logger
+
 	source      string
 	destination string
 
@@ -21,9 +24,15 @@ type RuleTask struct {
 	forceUpdate bool
 }
 
-func NewRuleTask(source, destination string,
+func NewRuleTask(
+	logger *logrus.Logger,
+	source string,
+	destination string,
 	osFilterList, archFilterList []string,
-	getAuthFunc func(repository string) types.Auth, forceUpdate bool) (*RuleTask, error) {
+	getAuthFunc func(repository string) types.Auth,
+	forceUpdate bool,
+) (*RuleTask, error) {
+
 	if source == "" {
 		return nil, fmt.Errorf("source url should not be empty")
 	}
@@ -33,6 +42,7 @@ func NewRuleTask(source, destination string,
 	}
 
 	return &RuleTask{
+		logger:         logger,
 		source:         source,
 		destination:    destination,
 		getAuthFunc:    getAuthFunc,
@@ -43,43 +53,120 @@ func NewRuleTask(source, destination string,
 }
 
 func (r *RuleTask) Run() ([]Task, string, error) {
-	//// random failure test
-	//rand.Seed(time.Now().UnixNano())
-	//if rand.Intn(100)%2 == 1 {
-	//	return nil, "", fmt.Errorf("random failure")
-	//}
 
-	// if source tag is not specific, get all tags of this source repo
-	sourceURLs, err := utils.GenerateRepoURLs(r.source, r.listAllTags)
+	r.logger.WithFields(logrus.Fields{
+		"source":      r.source,
+		"destination": r.destination,
+	}).Debug("analyzing image rule")
+
+	sourceURLs, err := utils.GenerateRepoURLs(
+		r.source,
+		func(registry, repository string) ([]string, error) {
+			return []string{"latest"}, nil
+		},
+	)
+
 	if err != nil {
-		return nil, "", fmt.Errorf("source url %s format error: %v", r.source, err)
+		return nil, "", fmt.Errorf(
+			"source url %s format error: %v",
+			r.source,
+			err,
+		)
 	}
 
-	// if destination tags or digest is not specific, reuse tags or digest of sourceURLs
-	destinationURLs, err := utils.GenerateRepoURLs(r.destination, func(registry, repository string) ([]string, error) {
-		var result []string
-		for _, item := range sourceURLs {
-			result = append(result, item.GetTagOrDigest())
+	destinationURLs, err := utils.GenerateRepoURLs(
+		r.destination,
+		func(registry, repository string) ([]string, error) {
+
+			tags := make([]string, 0, len(sourceURLs))
+
+			for _, item := range sourceURLs {
+				tags = append(
+					tags,
+					item.GetTagOrDigest(),
+				)
+			}
+
+			return tags, nil
+		},
+	)
+
+	if err != nil {
+		return nil, "", fmt.Errorf(
+			"destination url %s format error: %v",
+			r.destination,
+			err,
+		)
+	}
+
+	if len(sourceURLs) != len(destinationURLs) {
+		return nil, "", fmt.Errorf(
+			"source and destination tag count mismatch: source=%d destination=%d",
+			len(sourceURLs),
+			len(destinationURLs),
+		)
+	}
+
+	results := make(
+		[]Task,
+		0,
+		len(sourceURLs),
+	)
+
+	for i, sourceURL := range sourceURLs {
+
+		destinationURL := destinationURLs[i]
+
+		sourceAuth := r.getAuthFunc(
+			sourceURL.GetURLWithoutTagOrDigest(),
+		)
+
+		destinationAuth := r.getAuthFunc(
+			destinationURL.GetURLWithoutTagOrDigest(),
+		)
+
+		sourceImage, err := sync.NewImageSource(
+			sourceURL.GetRegistry(),
+			sourceURL.GetRepo(),
+			sourceURL.GetTagOrDigest(),
+			sourceAuth.Username,
+			sourceAuth.Password,
+			sourceAuth.Insecure,
+		)
+
+		if err != nil {
+			return nil, "", fmt.Errorf(
+				"create source image error: %v",
+				err,
+			)
 		}
-		return result, nil
-	})
-	if err != nil {
-		return nil, "", fmt.Errorf("source url %s format error: %v", r.source, err)
-	}
 
-	// TODO: remove duplicated sourceURL and destinationURL pair?
-	if err = checkSourceAndDestinationURLs(sourceURLs, destinationURLs); err != nil {
-		return nil, "", fmt.Errorf("failed to check source and destination urls for %s:%s: %v",
-			r.source, r.destination, err)
-	}
+		destinationImage, err := sync.NewImageDestination(
+			destinationURL.GetRegistry(),
+			destinationURL.GetRepo(),
+			destinationURL.GetTagOrDigest(),
+			destinationAuth.Username,
+			destinationAuth.Password,
+			destinationAuth.Insecure,
+		)
 
-	var results []Task
-	for index, s := range sourceURLs {
-		results = append(results,
-			NewURLTask(s, destinationURLs[index],
-				r.getAuthFunc(s.GetURLWithoutTagOrDigest()),
-				r.getAuthFunc(destinationURLs[index].GetURLWithoutTagOrDigest()),
-				r.osFilterList, r.archFilterList, r.forceUpdate,
+		if err != nil {
+			return nil, "", fmt.Errorf(
+				"create destination image error: %v",
+				err,
+			)
+		}
+
+		results = append(
+			results,
+			NewURLTask(
+				sourceImage,
+				destinationImage,
+				sourceAuth,
+				destinationAuth,
+				r.osFilterList,
+				r.archFilterList,
+				r.forceUpdate,
 			),
 		)
 	}
@@ -92,12 +179,10 @@ func (r *RuleTask) GetPrimary() Task {
 }
 
 func (r *RuleTask) Runnable() bool {
-	// always runnable
 	return true
 }
 
 func (r *RuleTask) ReleaseOnce() bool {
-	// do nothing
 	return true
 }
 
@@ -110,36 +195,13 @@ func (r *RuleTask) GetDestination() *sync.ImageDestination {
 }
 
 func (r *RuleTask) String() string {
-	return fmt.Sprintf("analyzing image rule for %s -> %s", r.source, r.destination)
+	return fmt.Sprintf(
+		"RuleTask %s -> %s",
+		r.source,
+		r.destination,
+	)
 }
 
 func (r *RuleTask) Type() Type {
 	return RuleType
-}
-
-func (r *RuleTask) listAllTags(sourceRegistry, sourceRepository string) ([]string, error) {
-	auth := r.getAuthFunc(sourceRegistry + "/" + sourceRepository)
-
-	imageSource, err := sync.NewImageSource(sourceRegistry, sourceRepository, "",
-		auth.Username, auth.Password, auth.Insecure)
-	if err != nil {
-		return nil, fmt.Errorf("generate %s image source error: %v", sourceRegistry+"/"+sourceRepository, err)
-	}
-
-	return imageSource.GetSourceRepoTags()
-}
-
-func checkSourceAndDestinationURLs(sourceURLs, destinationURLs []*utils.RepoURL) error {
-	if len(sourceURLs) != len(destinationURLs) {
-		return fmt.Errorf("the number of tags of source and destination is not matched")
-	}
-
-	// digest must be the same
-	if len(sourceURLs) == 1 && sourceURLs[0].HasDigest() && destinationURLs[0].HasDigest() {
-		if sourceURLs[0].GetTagOrDigest() != destinationURLs[0].GetTagOrDigest() {
-			return fmt.Errorf("the digest of source and destination must match")
-		}
-	}
-
-	return nil
 }

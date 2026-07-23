@@ -3,19 +3,16 @@ package task
 import (
 	"fmt"
 
-	"github.com/AliyunContainerService/image-syncer/pkg/utils"
-
 	"github.com/AliyunContainerService/image-syncer/pkg/concurrent"
 	"github.com/AliyunContainerService/image-syncer/pkg/sync"
+	"github.com/AliyunContainerService/image-syncer/pkg/utils"
 	"github.com/opencontainers/go-digest"
 )
 
-// ManifestTask sync a manifest from source to destination.
 type ManifestTask struct {
 	source      *sync.ImageSource
 	destination *sync.ImageDestination
 
-	// for manifest, this refers to a manifest list
 	primary Task
 
 	counter *concurrent.Counter
@@ -24,10 +21,17 @@ type ManifestTask struct {
 	digest *digest.Digest
 }
 
-func NewManifestTask(manifestListTask Task, source *sync.ImageSource, destination *sync.ImageDestination,
-	counter *concurrent.Counter, bytes []byte, digest *digest.Digest) *ManifestTask {
+func NewManifestTask(
+	primary Task,
+	source *sync.ImageSource,
+	destination *sync.ImageDestination,
+	counter *concurrent.Counter,
+	bytes []byte,
+	digest *digest.Digest,
+) *ManifestTask {
+
 	return &ManifestTask{
-		primary:     manifestListTask,
+		primary:     primary,
 		source:      source,
 		destination: destination,
 		counter:     counter,
@@ -37,27 +41,48 @@ func NewManifestTask(manifestListTask Task, source *sync.ImageSource, destinatio
 }
 
 func (m *ManifestTask) Run() ([]Task, string, error) {
-	var resultMsg string
 
-	//// random failure test
-	//rand.Seed(time.Now().UnixNano())
-	//if rand.Intn(100)%2 == 1 {
-	//	return nil, resultMsg, fmt.Errorf("random failure")
-	//}
+	if m.destination == nil {
 
-	if err := m.destination.PushManifest(m.bytes, m.digest); err != nil {
-		return nil, resultMsg, fmt.Errorf("failed to put manifest: %v", err)
+		return nil,
+			"",
+			fmt.Errorf(
+				"destination is nil",
+			)
+	}
+
+	if err := m.destination.PushManifest(
+		m.bytes,
+		m.digest,
+	); err != nil {
+
+		return nil,
+			"",
+			fmt.Errorf(
+				"failed to put manifest: %v",
+				err,
+			)
 	}
 
 	if m.primary == nil {
-		return nil, resultMsg, nil
+
+		return nil,
+			"manifest pushed",
+			nil
 	}
 
 	if m.primary.ReleaseOnce() {
-		resultMsg = "start to sync manifest list"
-		return []Task{m.primary}, resultMsg, nil
+
+		return []Task{
+				m.primary,
+			},
+			"start to sync parent manifest",
+			nil
 	}
-	return nil, resultMsg, nil
+
+	return nil,
+		"manifest pushed",
+		nil
 }
 
 func (m *ManifestTask) GetPrimary() Task {
@@ -65,12 +90,24 @@ func (m *ManifestTask) GetPrimary() Task {
 }
 
 func (m *ManifestTask) Runnable() bool {
+
+	if m.counter == nil {
+		return true
+	}
+
 	count, _ := m.counter.Value()
+
 	return count == 0
 }
 
 func (m *ManifestTask) ReleaseOnce() bool {
+
+	if m.counter == nil {
+		return true
+	}
+
 	count, _ := m.counter.Decrease()
+
 	return count == 0
 }
 
@@ -83,18 +120,53 @@ func (m *ManifestTask) GetDestination() *sync.ImageDestination {
 }
 
 func (m *ManifestTask) String() string {
-	var srcTagOrDigest, dstTagOrDigest string
-	if m.primary == nil {
-		srcTagOrDigest = m.GetSource().GetTagOrDigest()
-		dstTagOrDigest = m.GetDestination().GetTagOrDigest()
-	} else {
-		srcTagOrDigest = m.digest.String()
-		dstTagOrDigest = m.digest.String()
+
+	src := ""
+	dst := ""
+
+	if m.source != nil {
+
+		src = m.source.GetTagOrDigest()
 	}
 
-	return fmt.Sprintf("synchronizing manifest from %s/%s%s to %s/%s%s",
-		m.GetSource().GetRegistry(), m.GetSource().GetRepository(), utils.AttachConnectorToTagOrDigest(srcTagOrDigest),
-		m.GetDestination().GetRegistry(), m.GetDestination().GetRepository(), utils.AttachConnectorToTagOrDigest(dstTagOrDigest))
+	if m.destination != nil {
+
+		dst = m.destination.GetTagOrDigest()
+	}
+
+	if m.digest != nil {
+
+		src = m.digest.String()
+		dst = m.digest.String()
+	}
+
+	sourceRegistry := ""
+	sourceRepository := ""
+
+	destinationRegistry := ""
+	destinationRepository := ""
+
+	if m.source != nil {
+
+		sourceRegistry = m.source.GetRegistry()
+		sourceRepository = m.source.GetRepository()
+	}
+
+	if m.destination != nil {
+
+		destinationRegistry = m.destination.GetRegistry()
+		destinationRepository = m.destination.GetRepository()
+	}
+
+	return fmt.Sprintf(
+		"synchronizing manifest from %s/%s%s to %s/%s%s",
+		sourceRegistry,
+		sourceRepository,
+		utils.AttachConnectorToTagOrDigest(src),
+		destinationRegistry,
+		destinationRepository,
+		utils.AttachConnectorToTagOrDigest(dst),
+	)
 }
 
 func (m *ManifestTask) Type() Type {

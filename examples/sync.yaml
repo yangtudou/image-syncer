@@ -1,29 +1,27 @@
-target:
-  registry:
-  namespace:
+dest:
+  registry: registry.example.com
+  namespace: test
   flatten: true
-  platforms:
-    - linux/amd64
+  auth:
+    username:
+    password:
 
-images:
+sources:
   docker.io:
-    cloudflare/cloudflared:
-    metacubex/mihomo:
-    library/registry: 3
-    library/traefik: v3.7
-    joxit/docker-registry-ui: main
-    tecnativa/docker-socket-proxy: master
-    gdy666/lucky: v2
-    louislam/dockge: 1
-    louislam/uptime-kuma: 2
+    # auth:
+    #   username:
+    #   password:
+    images:
+      cloudflare/cloudflared:
+      joxit/docker-registry-ui: main
+      gdy666/lucky: v2
+      louislam/uptime-kuma: 2
 
   ghcr.io:
-    finb/bark-server:
-    hacdias/webdav:
-    dani-garcia/vaultwarden:
-    jellyfin/jellyfin:
-    userdocs/iperf3-static:
-    usememos/memos: 0.29.1
-    tailscale/tailscale: stable
-    sagernet/sing-box:
-      - +latest-testing
+    # auth:
+    #   username:
+    #   password:
+    images:
+      finb/bark-server:
+      usememos/memos: 0.29.1
+      sagernet/sing-box: [ latest, latest-testing ]

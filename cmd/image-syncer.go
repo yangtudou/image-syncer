@@ -3,24 +3,25 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/AliyunContainerService/image-syncer/pkg/client"
 	"github.com/AliyunContainerService/image-syncer/pkg/config"
-	"github.com/AliyunContainerService/image-syncer/pkg/mapper"
 	"github.com/AliyunContainerService/image-syncer/pkg/utils"
 
+	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
 
 var (
-	logPath, authFile, syncFile, successImagesFile, outputImagesFormat string
+	logPath, syncFile, successImagesFile, outputImagesFormat string
 
 	procNum, retries int
 
 	osFilterList, archFilterList []string
 
 	forceUpdate bool
+
+	debug bool
 )
 
 var RootCmd = &cobra.Command{
@@ -30,71 +31,121 @@ var RootCmd = &cobra.Command{
 	Long:    "A Fast and Flexible docker registry image synchronization tool implement by Go.",
 
 	RunE: func(cmd *cobra.Command, args []string) error {
+
 		cmd.SilenceErrors = true
 
+		logger := client.NewFileLogger(
+			logPath,
+		)
+
+		if debug {
+			logger.SetLevel(
+				logrus.DebugLevel,
+			)
+		} else {
+			logger.SetLevel(
+				logrus.InfoLevel,
+			)
+		}
+
+		logger.Info(
+			"image-syncer starting",
+		)
+
+		logger.WithFields(logrus.Fields{
+			"sync":    syncFile,
+			"workers": procNum,
+			"retry":   retries,
+			"force":   forceUpdate,
+		}).Info(
+			"runtime options",
+		)
+
 		if syncFile == "" {
-			return fmt.Errorf("sync config is required")
+			return fmt.Errorf(
+				"sync config is required",
+			)
 		}
 
-		if authFile == "" {
-			return fmt.Errorf("auth file is required")
-		}
+		cfg, err := config.Load(
+			syncFile,
+		)
 
-		cfg, err := config.Load(syncFile)
 		if err != nil {
-			return fmt.Errorf("load sync config error: %v", err)
+
+			logger.WithError(err).
+				Error(
+					"load sync config failed",
+				)
+
+			return fmt.Errorf(
+				"load sync config error: %v",
+				err,
+			)
 		}
 
-		mappings := mapper.Generate(cfg)
-
-		if len(mappings) == 0 {
-			return fmt.Errorf("no image mappings found")
-		}
-
-		tempDir, err := os.MkdirTemp("", "image-syncer-*")
-		if err != nil {
-			return fmt.Errorf("create temp dir error: %v", err)
-		}
-
-		defer os.RemoveAll(tempDir)
-
-		imagesFile := filepath.Join(tempDir, "images.yaml")
-
-		if err := mapper.WriteImageSyncer(imagesFile, mappings); err != nil {
-			return fmt.Errorf("write generated images config error: %v", err)
-		}
+		logger.Info(
+			"sync config loaded",
+		)
 
 		syncClient, err := client.NewSyncClient(
-			"",
-			authFile,
-			imagesFile,
+			cfg,
 			logPath,
 			successImagesFile,
 			outputImagesFormat,
 			procNum,
 			retries,
-			utils.RemoveEmptyItems(osFilterList),
-			utils.RemoveEmptyItems(archFilterList),
+			utils.RemoveEmptyItems(
+				osFilterList,
+			),
+			utils.RemoveEmptyItems(
+				archFilterList,
+			),
 			forceUpdate,
 		)
 
 		if err != nil {
-			return fmt.Errorf("init sync client error: %v", err)
+
+			logger.WithError(err).
+				Error(
+					"init sync client failed",
+				)
+
+			return fmt.Errorf(
+				"init sync client error: %v",
+				err,
+			)
 		}
+
+		logger.Info(
+			"sync client initialized",
+		)
 
 		cmd.SilenceUsage = true
 
-		return syncClient.Run()
+		logger.Info(
+			"starting synchronization",
+		)
+
+		if err := syncClient.Run(); err != nil {
+
+			logger.WithError(err).
+				Error(
+					"synchronization failed",
+				)
+
+			return err
+		}
+
+		logger.Info(
+			"synchronization completed",
+		)
+
+		return nil
 	},
 }
 
 func init() {
-	RootCmd.PersistentFlags().StringVar(
-		&authFile,
-		"auth",
-		"",
-		"auth file path",
-	)
 
 	RootCmd.PersistentFlags().StringVar(
 		&syncFile,
@@ -107,7 +158,7 @@ func init() {
 		&logPath,
 		"log",
 		"",
-		"log file path (default in os.Stderr)",
+		"log file path",
 	)
 
 	RootCmd.PersistentFlags().IntVarP(
@@ -160,11 +211,21 @@ func init() {
 		"yaml",
 		"success images output format",
 	)
+
+	RootCmd.PersistentFlags().BoolVar(
+		&debug,
+		"debug",
+		false,
+		"enable debug log",
+	)
 }
 
 func Execute() {
+
 	if err := RootCmd.Execute(); err != nil {
+
 		fmt.Println(err)
+
 		os.Exit(-1)
 	}
 }
