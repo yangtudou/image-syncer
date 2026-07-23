@@ -10,42 +10,42 @@ dest:
     registry: local.example
 
 mirror:
-  enable: true # default: false
-  mirror-from:
-    - name: aliyun
-      url: aliyun.example
-      flatten: true # default: false
-    - name: local
-      url: local.example
+  - name: aliyun
+    url: aliyun.example
+    type: flatten
+    # default: nill
+    # flatten => basename
+
+  - name: local
+    url: local.example
+
+# 全局指定
+sync:
+  - aliyun
 
 sources:
-  # 全局指定
-  sync:
-    - aliyun
-    - local
-  image-from:
-    docker.io:
-      # 单仓库指定
-      sync:
-        - local
-      # auth:
-      #   username:
-      #   password:
-      images:
-        cloudflare/cloudflared:
-        joxit/docker-registry-ui: main
-        gdy666/lucky: v2
-        louislam/uptime-kuma: 2
+  docker.io:
+    # 单仓库指定
+    sync:
+      - local
+    # auth:
+    #   username:
+    #   password:
+    images:
+      cloudflare/cloudflared:latest # nill => latest
+      joxit/docker-registry-ui: main
+      gdy666/lucky: v2
+      louislam/uptime-kuma: 2
 
     ghcr.io:
-      # 单仓库指定
-      sync:
-        - local
-        - aliyun
-      # auth:
-      #   username:
-      #   password:
-      images:
-        finb/bark-server:
-        usememos/memos: 0.29.1
-        sagernet/sing-box: [ latest, latest-testing ]
+    # 单仓库指定
+    sync:
+      - local
+      - aliyun
+    # auth:
+    #   username:
+    #   password:
+    images:
+      finb/bark-server:
+      usememos/memos: 0.29.1
+      sagernet/sing-box: [ latest, latest-testing ]
