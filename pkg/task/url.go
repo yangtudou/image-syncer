@@ -17,11 +17,14 @@ type URLTask struct {
 	sourceAuth      types.Auth
 	destinationAuth types.Auth
 
-	osFilterList, archFilterList []string
+	osFilterList   []string
+	archFilterList []string
 
 	forceUpdate bool
 
 	manifestTask *ManifestTask
+
+	plan *SyncPlan
 }
 
 func NewURLTask(
@@ -32,6 +35,7 @@ func NewURLTask(
 	osFilterList []string,
 	archFilterList []string,
 	forceUpdate bool,
+	plan *SyncPlan,
 ) *URLTask {
 
 	return &URLTask{
@@ -42,6 +46,7 @@ func NewURLTask(
 		osFilterList:    osFilterList,
 		archFilterList:  archFilterList,
 		forceUpdate:     forceUpdate,
+		plan:            plan,
 	}
 }
 
@@ -99,19 +104,6 @@ func (u *URLTask) Run() ([]Task, string, error) {
 		0,
 	)
 
-	/*
-		Manifest List / OCI Index
-
-		不要判断具体类型:
-			manifest.OCI1IndexPublic
-			manifest.Schema2ListPublic
-
-		因为 containers/image 不暴露这些类型。
-
-		GenerateManifestObj 已经解析出了 subManifestInfos。
-		只要存在子 manifest，就说明这是 manifest list。
-	*/
-
 	if len(subManifestInfos) > 0 {
 
 		counter :=
@@ -128,6 +120,7 @@ func (u *URLTask) Run() ([]Task, string, error) {
 				counter,
 				bytes,
 				nil,
+				u.plan,
 			)
 
 		u.manifestTask = rootTask
@@ -163,6 +156,7 @@ func (u *URLTask) Run() ([]Task, string, error) {
 					childCounter,
 					sub.Bytes,
 					sub.Digest,
+					u.plan,
 				)
 
 			for _, info := range childBlobInfos {
@@ -172,6 +166,7 @@ func (u *URLTask) Run() ([]Task, string, error) {
 					NewBlobTask(
 						childManifestTask,
 						info,
+						u.plan,
 					),
 				)
 			}
@@ -185,7 +180,6 @@ func (u *URLTask) Run() ([]Task, string, error) {
 			}
 		}
 
-		// 如果没有 blob，直接推 index
 		if len(result) == 0 {
 
 			result = append(
@@ -198,10 +192,6 @@ func (u *URLTask) Run() ([]Task, string, error) {
 			"start to sync manifest list",
 			nil
 	}
-
-	/*
-		普通单架构 manifest
-	*/
 
 	mainManifest, ok :=
 		obj.(manifest.Manifest)
@@ -245,6 +235,7 @@ func (u *URLTask) Run() ([]Task, string, error) {
 			counter,
 			bytes,
 			nil,
+			u.plan,
 		)
 
 	u.manifestTask = manifestTask
@@ -256,6 +247,7 @@ func (u *URLTask) Run() ([]Task, string, error) {
 			NewBlobTask(
 				manifestTask,
 				info,
+				u.plan,
 			),
 		)
 	}
@@ -291,6 +283,10 @@ func (u *URLTask) GetSource() *imagesync.ImageSource {
 
 func (u *URLTask) GetDestination() *imagesync.ImageDestination {
 	return u.destination
+}
+
+func (u *URLTask) GetPlan() *SyncPlan {
+	return u.plan
 }
 
 func (u *URLTask) String() string {

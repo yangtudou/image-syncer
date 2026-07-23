@@ -13,10 +13,10 @@ import (
 	"github.com/AliyunContainerService/image-syncer/pkg/concurrent"
 	appconfig "github.com/AliyunContainerService/image-syncer/pkg/config"
 	"github.com/AliyunContainerService/image-syncer/pkg/task"
+	"github.com/AliyunContainerService/image-syncer/pkg/task/rule"
 	"github.com/AliyunContainerService/image-syncer/pkg/utils/types"
 )
 
-// Client describes a synchronization client
 type Client struct {
 	taskList       *concurrent.List
 	failedTaskList *concurrent.List
@@ -24,22 +24,26 @@ type Client struct {
 	taskCounter       *concurrent.Counter
 	failedTaskCounter *concurrent.Counter
 
-	successImagesList                     *concurrent.ImageList
-	successImagesFile, outputImagesFormat string
+	successImagesList *concurrent.ImageList
+
+	successImagesFile  string
+	outputImagesFormat string
 
 	config *Config
 
+	plan *task.SyncPlan
+
 	routineNum int
 	retries    int
-	logger     *logrus.Logger
+
+	logger *logrus.Logger
 
 	forceUpdate bool
 }
 
-// NewSyncClient creates synchronization client
 func NewSyncClient(
 	cfg *appconfig.Config,
-	logFile string,
+	logger *logrus.Logger,
 	successImagesFile string,
 	outputImagesFormat string,
 	routineNum int,
@@ -49,9 +53,7 @@ func NewSyncClient(
 	forceUpdate bool,
 ) (*Client, error) {
 
-	logger := NewFileLogger(logFile)
-
-	logger.Info("initializing sync client")
+	logger.Info("creating sync client")
 
 	config, err := NewSyncConfigFromModel(
 		cfg,
@@ -60,9 +62,6 @@ func NewSyncClient(
 	)
 
 	if err != nil {
-
-		logger.WithError(err).
-			Error("generate sync config failed")
 
 		return nil, fmt.Errorf(
 			"generate config error: %v",
@@ -88,15 +87,18 @@ func NewSyncClient(
 
 		successImagesList: concurrent.NewImageList(),
 
-		successImagesFile: successImagesFile,
-
+		successImagesFile:  successImagesFile,
 		outputImagesFormat: outputImagesFormat,
 
 		config: config,
 
-		routineNum: routineNum,
+		plan: task.NewSyncPlan(
+			"image-sync",
+			"registry",
+		),
 
-		retries: retries,
+		routineNum: routineNum,
+		retries:    retries,
 
 		logger: logger,
 
@@ -104,57 +106,26 @@ func NewSyncClient(
 	}, nil
 }
 
-// Run starts synchronization
 func (c *Client) Run() error {
 
 	start := time.Now()
 
+	c.plan.Start()
+
 	c.logger.WithFields(logrus.Fields{
 		"workers": c.routineNum,
-		"retry":   c.retries,
-	}).Info("sync started")
+		"retries": c.retries,
+	}).Info(
+		"sync started",
+	)
 
 	for source, dest := range c.config.ImageList {
 
-		c.logger.WithFields(logrus.Fields{
-			"source": source,
-			"dest":   dest,
-		}).Debug("processing sync rule")
-
-		destList := []string{}
-
-		switch value := dest.(type) {
-
-		case string:
-
-			if value != "" {
-				destList = append(
-					destList,
-					value,
-				)
-			}
-
-		case []string:
-
-			destList = append(
-				destList,
-				value...,
-			)
-
-		case []interface{}:
-
-			for _, item := range value {
-
-				destList = append(
-					destList,
-					fmt.Sprintf("%v", item),
-				)
-			}
-		}
+		destList := normalizeDestinations(dest)
 
 		for _, destination := range destList {
 
-			ruleTask, err := task.NewRuleTask(
+			ruleTask, err := rule.NewRuleTask(
 				c.logger,
 				source,
 				destination,
@@ -162,33 +133,19 @@ func (c *Client) Run() error {
 				c.config.archFilterList,
 				func(repository string) types.Auth {
 
-					auth, exist := c.config.GetAuth(
+					auth, _ := c.config.GetAuth(
 						repository,
 					)
-
-					if !exist {
-
-						c.logger.WithField(
-							"repository",
-							repository,
-						).Debug(
-							"auth not found, using anonymous access",
-						)
-					}
 
 					return auth
 				},
 				c.forceUpdate,
+				c.plan,
 			)
 
 			if err != nil {
 
-				return fmt.Errorf(
-					"failed to generate rule task for %s -> %s: %v",
-					source,
-					destination,
-					err,
-				)
+				return err
 			}
 
 			c.taskList.PushBack(
@@ -212,86 +169,12 @@ func (c *Client) Run() error {
 		"total",
 		total,
 	).Info(
-		"initial tasks created",
+		"tasks created",
 	)
 
 	pool, err := ants.NewPoolWithFunc(
 		c.routineNum,
-		func(i interface{}) {
-
-			tTask, ok := i.(task.Task)
-
-			if !ok {
-
-				c.logger.Errorf(
-					"invalid task type %T",
-					i,
-				)
-
-				return
-			}
-
-			c.logger.WithFields(logrus.Fields{
-				"type": tTask.Type(),
-				"task": tTask.String(),
-			}).Debug(
-				"task started",
-			)
-
-			nextTasks, message, err := tTask.Run()
-
-			count, total := c.taskCounter.Increase()
-
-			progress := fmt.Sprintf(
-				"%d/%d",
-				count,
-				total,
-			)
-
-			if err != nil {
-
-				c.failedTaskList.PushBack(
-					tTask,
-				)
-
-				c.failedTaskCounter.IncreaseTotal()
-
-				c.logger.WithFields(logrus.Fields{
-					"task":     tTask.String(),
-					"progress": progress,
-				}).WithError(err).
-					Error(
-						"task failed",
-					)
-
-			} else {
-
-				if tTask.Type() == task.ManifestType {
-
-					c.successImagesList.Add(
-						tTask.GetSource().String(),
-						tTask.GetDestination().String(),
-					)
-				}
-
-				c.logger.WithFields(logrus.Fields{
-					"task":     tTask.String(),
-					"message":  message,
-					"progress": progress,
-				}).Info(
-					"task finished",
-				)
-			}
-
-			for _, next := range nextTasks {
-
-				c.taskList.PushFront(
-					next,
-				)
-
-				c.taskCounter.IncreaseTotal()
-			}
-		},
+		c.executeTask,
 	)
 
 	if err != nil {
@@ -301,14 +184,10 @@ func (c *Client) Run() error {
 	defer pool.Release()
 
 	if err := c.handleTasks(pool); err != nil {
-
-		c.logger.WithError(err).
-			Error(
-				"handle tasks failed",
-			)
+		return err
 	}
 
-	for i := 0; i < c.retries; i++ {
+	for retry := 0; retry < c.retries; retry++ {
 
 		_, failed := c.failedTaskCounter.Value()
 
@@ -318,87 +197,201 @@ func (c *Client) Run() error {
 
 		c.logger.WithField(
 			"retry",
-			i+1,
+			retry+1,
 		).Info(
 			"retry failed tasks",
 		)
 
-		c.taskCounter,
-			c.failedTaskCounter =
-			c.failedTaskCounter,
+		oldFailed := c.failedTaskList
+
+		c.failedTaskList = concurrent.NewList()
+
+		c.failedTaskCounter =
 			concurrent.NewCounter(
 				0,
 				0,
 			)
 
-		if c.failedTaskList.Len() > 0 {
-
-			c.taskList.PushBackList(
-				c.failedTaskList,
+		c.taskCounter =
+			concurrent.NewCounter(
+				0,
+				0,
 			)
 
-			c.failedTaskList.Reset()
-		}
+		c.taskList.PushBackList(
+			oldFailed,
+		)
 
-		if c.taskList.Len() > 0 {
-
-			if err := c.handleTasks(pool); err != nil {
-
-				c.logger.WithError(err).
-					Error(
-						"retry tasks failed",
-					)
-			}
+		if err := c.handleTasks(pool); err != nil {
+			return err
 		}
 	}
 
-	c.logger.WithFields(logrus.Fields{
-		"failed":   c.failedTaskList.Len(),
-		"duration": time.Since(start),
-	}).Info(
-		"sync finished",
+	c.plan.Finish()
+
+	c.plan.Print()
+
+	c.logger.WithFields(
+		logrus.Fields{
+			"summary":  c.plan.Summary(),
+			"duration": time.Since(start),
+		},
+	).Info(
+		"sync completed",
 	)
 
-	if c.successImagesFile != "" {
+	c.plan.Print()
 
-		file, err := os.OpenFile(
-			c.successImagesFile,
-			os.O_CREATE|os.O_TRUNC|os.O_WRONLY,
-			0666,
-		)
-
-		if err != nil {
-			return err
-		}
-
-		defer file.Close()
-
-		if c.outputImagesFormat == "json" {
-
-			return json.NewEncoder(
-				file,
-			).Encode(
-				c.successImagesList.Content(),
-			)
-		}
-
-		return yaml.NewEncoder(
-			file,
-		).Encode(
-			c.successImagesList.Content(),
-		)
+	if err := c.writeSuccessImages(); err != nil {
+		return err
 	}
 
 	_, failed := c.failedTaskCounter.Value()
 
-	if failed != 0 {
+	if failed > 0 {
 
 		return fmt.Errorf(
-			"failed tasks exist",
+			"sync failed tasks: %d",
+			failed,
 		)
 	}
 
 	return nil
+}
+
+func (c *Client) executeTask(
+	i interface{},
+) {
+
+	t, ok := i.(task.Task)
+
+	if !ok {
+		return
+	}
+
+	c.logger.WithFields(
+		logrus.Fields{
+			"type": t.Type(),
+			"task": t.String(),
+		},
+	).Debug(
+		"task running",
+	)
+
+	if t.Type() == task.URLType {
+
+		c.plan.MarkRunning(
+			t.GetSource().String(),
+			t.GetDestination().String(),
+		)
+	}
+
+	next, message, err := t.Run()
+
+	count, total :=
+		c.taskCounter.Increase()
+
+	progress :=
+		fmt.Sprintf(
+			"%d/%d",
+			count,
+			total,
+		)
+
+	if err != nil {
+
+		c.failedTaskList.PushBack(t)
+
+		c.failedTaskCounter.IncreaseTotal()
+
+		if t.Type() == task.URLType {
+
+			c.plan.MarkFailed(
+				t.GetSource().String(),
+				t.GetDestination().String(),
+				err,
+			)
+		}
+
+		c.logger.WithFields(
+			logrus.Fields{
+				"task":     t.String(),
+				"progress": progress,
+			},
+		).WithError(err).
+			Error(
+				"task failed",
+			)
+
+		return
+	}
+
+	if t.Type() == task.URLType {
+
+		c.successImagesList.Add(
+			t.GetSource().String(),
+			t.GetDestination().String(),
+		)
+
+		c.plan.MarkSuccess(
+			t.GetSource().String(),
+			t.GetDestination().String(),
+		)
+	}
+
+	c.logger.WithFields(
+		logrus.Fields{
+			"task":     t.String(),
+			"message":  message,
+			"progress": progress,
+		},
+	).Info(
+		"task finished",
+	)
+
+	for _, nextTask := range next {
+
+		c.taskList.PushFront(
+			nextTask,
+		)
+
+		c.taskCounter.IncreaseTotal()
+	}
+}
+
+func normalizeDestinations(
+	value interface{},
+) []string {
+
+	result := []string{}
+
+	switch v := value.(type) {
+
+	case string:
+
+		if v != "" {
+			result = append(result, v)
+		}
+
+	case []string:
+
+		result = append(
+			result,
+			v...,
+		)
+
+	case []interface{}:
+
+		for _, item := range v {
+
+			result = append(
+				result,
+				fmt.Sprintf("%v", item),
+			)
+		}
+	}
+
+	return result
 }
 
 func (c *Client) handleTasks(
@@ -416,18 +409,48 @@ func (c *Client) handleTasks(
 			}
 
 			time.Sleep(
-				time.Second,
+				200 * time.Millisecond,
 			)
 
 			continue
 		}
 
-		if err := pool.Invoke(
-			item,
-		); err != nil {
+		if err := pool.Invoke(item); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+func (c *Client) writeSuccessImages() error {
+
+	if c.successImagesFile == "" {
+		return nil
+	}
+
+	file, err := os.OpenFile(
+		c.successImagesFile,
+		os.O_CREATE|os.O_TRUNC|os.O_WRONLY,
+		0666,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	defer file.Close()
+
+	if c.outputImagesFormat == "json" {
+
+		return json.NewEncoder(file).
+			Encode(
+				c.successImagesList.Content(),
+			)
+	}
+
+	return yaml.NewEncoder(file).
+		Encode(
+			c.successImagesList.Content(),
+		)
 }

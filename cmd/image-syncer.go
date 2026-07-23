@@ -34,19 +34,16 @@ var RootCmd = &cobra.Command{
 
 		cmd.SilenceErrors = true
 
-		logger := client.NewFileLogger(
-			logPath,
-		)
+		level := logrus.InfoLevel
 
 		if debug {
-			logger.SetLevel(
-				logrus.DebugLevel,
-			)
-		} else {
-			logger.SetLevel(
-				logrus.InfoLevel,
-			)
+			level = logrus.DebugLevel
 		}
+
+		logger := client.NewLogger(
+			logPath,
+			level,
+		)
 
 		logger.Info(
 			"image-syncer starting",
@@ -57,11 +54,12 @@ var RootCmd = &cobra.Command{
 			"workers": procNum,
 			"retry":   retries,
 			"force":   forceUpdate,
-		}).Info(
+		}).Debug(
 			"runtime options",
 		)
 
 		if syncFile == "" {
+
 			return fmt.Errorf(
 				"sync config is required",
 			)
@@ -90,7 +88,7 @@ var RootCmd = &cobra.Command{
 
 		syncClient, err := client.NewSyncClient(
 			cfg,
-			logPath,
+			logger,
 			successImagesFile,
 			outputImagesFormat,
 			procNum,

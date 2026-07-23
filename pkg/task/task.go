@@ -33,6 +33,9 @@ type Task interface {
 	// GetDestination returns destination image.
 	GetDestination() *sync.ImageDestination
 
+	// GetPlan returns sync plan.
+	GetPlan() *SyncPlan
+
 	// String returns task description.
 	String() string
 
@@ -40,7 +43,6 @@ type Task interface {
 	Type() Type
 }
 
-// TaskInfo returns common task information for logging.
 type TaskInfo struct {
 	Type        Type
 	Description string
@@ -48,23 +50,24 @@ type TaskInfo struct {
 	Destination string
 }
 
-// DescribeTask converts Task into log-friendly information.
 func DescribeTask(t Task) TaskInfo {
 
-	info := TaskInfo{
-		Type: t.Type(),
+	info := TaskInfo{}
+
+	if t == nil {
+		return info
 	}
 
-	if t != nil {
-		info.Description = t.String()
+	info.Type = t.Type()
 
-		if source := t.GetSource(); source != nil {
-			info.Source = source.String()
-		}
+	info.Description = t.String()
 
-		if destination := t.GetDestination(); destination != nil {
-			info.Destination = destination.String()
-		}
+	if source := t.GetSource(); source != nil {
+		info.Source = source.String()
+	}
+
+	if destination := t.GetDestination(); destination != nil {
+		info.Destination = destination.String()
 	}
 
 	return info

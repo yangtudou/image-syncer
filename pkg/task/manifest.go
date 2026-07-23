@@ -19,6 +19,8 @@ type ManifestTask struct {
 
 	bytes  []byte
 	digest *digest.Digest
+
+	plan *SyncPlan
 }
 
 func NewManifestTask(
@@ -28,6 +30,7 @@ func NewManifestTask(
 	counter *concurrent.Counter,
 	bytes []byte,
 	digest *digest.Digest,
+	plan *SyncPlan,
 ) *ManifestTask {
 
 	return &ManifestTask{
@@ -37,6 +40,7 @@ func NewManifestTask(
 		counter:     counter,
 		bytes:       bytes,
 		digest:      digest,
+		plan:        plan,
 	}
 }
 
@@ -117,6 +121,10 @@ func (m *ManifestTask) GetSource() *sync.ImageSource {
 
 func (m *ManifestTask) GetDestination() *sync.ImageDestination {
 	return m.destination
+}
+
+func (m *ManifestTask) GetPlan() *SyncPlan {
+	return m.plan
 }
 
 func (m *ManifestTask) String() string {
